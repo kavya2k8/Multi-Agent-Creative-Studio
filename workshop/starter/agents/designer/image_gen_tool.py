@@ -5,6 +5,7 @@ import uuid
 
 from google import genai
 from google.adk.tools import ToolContext
+from google.cloud import storage
 from google.genai import types
 
 
@@ -48,23 +49,27 @@ async def generate_image(
     prompt_with_aspect = f"{image_prompt}\n\nGenerate this as a {aspect_hint} image."
 
     try:
-        # TODO 1: Create a genai.Client with vertexai=True, project, and location.
-        # Call client.models.generate_content() with:
-        #   - model=image_model
-        #   - contents=prompt_with_aspect
-        #   - config=types.GenerateContentConfig(
-        #       response_modalities=["IMAGE", "TEXT"],
-        #       http_options=types.HttpOptions(
-        #           retry_options=types.HttpRetryOptions(
-        #               attempts=5, exp_base=2, initial_delay=30,
-        #               http_status_codes=[429, 500, 503, 504],
-        #           ),
-        #           timeout=180_000,
-        #       ),
-        #     )
-        # Store the result in `response`.
-        # Note: retry_options here is essential — image generation quota (DSQ) recovers
-        # slowly, so initial_delay=30s gives the pool time to refill between attempts.
+        client = genai.Client(
+            vertexai=True,
+            project=project_id,
+            location=location,
+        )
+        response = await client.aio.models.generate_content(
+            model=image_model,
+            contents=prompt_with_aspect,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+                http_options=types.HttpOptions(
+                    retry_options=types.HttpRetryOptions(
+                        attempts=5,
+                        exp_base=2,
+                        initial_delay=30,
+                        http_status_codes=[429, 500, 503, 504],
+                    ),
+                    timeout=180_000,
+                ),
+            ),
+        )
 
         # TODO 2: Extract image bytes from the response.
         # Iterate over response.candidates[0].content.parts.
@@ -73,20 +78,28 @@ async def generate_image(
         # If no image_bytes found, return {"status": "error", "error": "Gemini returned no image data"}.
         image_bytes = None
         mime_type = "image/png"
+        if response.candidates:
+            for part in response.candidates[0].content.parts:
+                if part.inline_data is not None:
+                    image_bytes = part.inline_data.data
+                    mime_type = part.inline_data.mime_type or "image/png"
+                    break
 
-        # TODO 3: Upload image_bytes to GCS and return the URI.
-        # - Determine the file extension from mime_type ("jpg" if "jpeg" in mime_type else "png").
-        # - Create a storage.Client and get the bucket (bucket_name).
-        # - Build blob_name: f"campaign-images/{concept_name}-{uuid.uuid4().hex[:8]}.{ext}"
-        # - Upload via blob.upload_from_file(io.BytesIO(image_bytes), content_type=mime_type).
-        # - Build gcs_uri = f"gs://{bucket_name}/{blob_name}".
-        gcs_uri = None
+        if not image_bytes:
+            return {"status": "error", "error": "Gemini returned no image data"}
+
+        ext = "jpg" if "jpeg" in mime_type else "png"
+        blob_name = f"campaign-images/{concept_name}-{uuid.uuid4().hex[:8]}.{ext}"
+        storage_client = storage.Client(project=project_id)
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        blob.upload_from_file(io.BytesIO(image_bytes), content_type=mime_type)
+        gcs_uri = f"gs://{bucket_name}/{blob_name}"
 
         # Save as ADK artifact so adk web renders the image inline when testing
         # the Designer directly. Silently skipped when no artifact service is
         # configured (e.g. Cloud Run deployment).
         if image_bytes and gcs_uri:
-            ext = "jpg" if "jpeg" in mime_type else "png"
             try:
                 artifact = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
                 await tool_context.save_artifact(f"{concept_name}.{ext}", artifact)

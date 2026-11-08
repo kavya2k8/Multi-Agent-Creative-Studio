@@ -12,9 +12,13 @@ try:
 except ImportError:
     from retry import GENERATE_CONTENT_CONFIG
 
+from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
+from mcp import StdioServerParameters
+
 load_dotenv()
 
 logger = logging.getLogger("ai_creative_studio.project_manager")
+
 
 
 def handle_notion_error(
@@ -23,38 +27,36 @@ def handle_notion_error(
     tool_context: ToolContext,
     tool_response: dict,
 ) -> dict | None:
-    """Intercept Notion API errors and replace the raw stack trace with a clean message."""
+    """Log Notion API errors without changing the original error response."""
     if not tool.name.startswith("API-"):
         return None
 
     content = (tool_response.get("content") or [{}])[0].get("text", "")
+
     try:
         data = json.loads(content)
-    except Exception:
-        return None
+        status = data.get("status")
+        code = data.get("code")
+        message = data.get("message", "")
 
-    status = data.get("status")
-    if status not in (400, 404):
-        return None
-
-    message = data.get("message", "")
-    code = data.get("code", "")
-    logger.warning("Notion %s (%s) on %s — injecting recovery hint", status, code, tool.name)
-
-    if status == 404 and code == "object_not_found":
-        # The misleading Notion message blames sharing/permissions, but the real
-        # cause is passing a database ID as page_id in the parent object.
-        message = (
-            "object_not_found: you passed a database ID as page_id. "
-            'Use {"parent": {"database_id": "<id>"}} not {"parent": {"page_id": "<id>"}}.'
+        if status and int(status) >= 400:
+            logger.error(
+                "Notion API error | Tool: %s | Status: %s | Code: %s | Message: %s",
+                tool.name,
+                status,
+                code,
+                message,
+            )
+    except (ValueError, TypeError, json.JSONDecodeError):
+        logger.warning(
+            "Could not parse Notion response from %s: %s",
+            tool.name,
+            content[:1000],
         )
 
-    return {
-        "content": [{
-            "type": "text",
-            "text": f"Notion {status} ({code}) on {tool.name}: {message}\n\nRetry with corrected parameters.",
-        }]
-    }
+    # Preserve the original Notion response for the agent.
+    return None
+
 
 
 def get_system_instruction(project_database_id=None, tasks_database_id=None):
@@ -62,32 +64,42 @@ def get_system_instruction(project_database_id=None, tasks_database_id=None):
     # receives no tool instructions for capabilities it doesn't have.
     notion_section = (
         f"""
+
 Projects database ID: {project_database_id}
 Tasks database ID: {tasks_database_id}
 
-Also persist the project and tasks to these Notion databases using the available Notion tools.
-Notion tools follow the pattern `API-<operation>` — use their exact names as listed in the tool
-manifest. Use them directly — never wrap in `print()` or prefix with `default_api.`
+MANDATORY NOTION PERSISTENCE:
+You MUST save the project and every task to Notion. Returning a text timeline
+does NOT count as successful persistence.
 
-Before creating anything, use the available tools to discover the schema of each database.
-Only use property names and types that actually exist in the schema you discover.
+Follow this exact sequence:
 
-Property rules:
-- Always set the database parent using `database_id` — never `page_id`
-- Never set "people" or "person" type properties — integration tokens cannot assign users; skip them
-- For "relation" type properties linking tasks to the project: set ONLY {{"relation": [{{"id": "<project-page-id>"}}]}}.
-  Never set sub-fields like name, state, start, lat on the relation - those are read-only rollups.
-  If a task creation fails with a validation_error on a relation property, immediately retry
-  creating that task WITHOUT the relation property entirely.
-- Only set properties whose type you can identify from the schema response; if a property type
-  is unclear after reading the schema, skip it and note it in the Notion Status
+1. Retrieve the Projects database schema using the available Notion tools.
+2. Retrieve the Tasks database schema using the available Notion tools.
+3. Identify the exact property names and types from both schemas.
+4. Create the project page in the Projects database.
+   - Parent must use database_id.
+   - Set Project Name to the campaign name.
+   - Populate Campaign Type, Status, Target Audience, and Created Date
+     when those properties exist.
+5. Capture the actual page ID returned by the project creation call.
+6. Create EACH task as a separate page in the Tasks database.
+   - Parent must use database_id.
+   - Set Task Name, Owner, Status, Priority, Start Date, Due Date,
+     Duration, and Notes wherever those properties exist.
+   - Set the Project relation using the actual project page ID.
+7. If a relation causes a validation error, retry that task without
+   the relation. Do not abandon the task.
+8. Verify the creation response for the project and every task.
+9. Report the exact number of successfully created tasks and any failures.
 
-If any Notion call fails, continue — the text timeline is always the primary deliverable.
-Write your complete response AFTER all Notion operations are done (or have failed).
-
-If image HTTPS links are provided in the input (under "Generated Images" from the Creative
-Director), add them to the Notion project page body as a bulleted list under a
-"Generated Images" heading after creating the project page.
+IMPORTANT:
+- Discover the exact Notion tool names from the available tool manifest.
+- Invoke the tools directly; do not merely describe the intended operations.
+- Never claim a project or task was saved unless the Notion API confirms it.
+- Preserve the complete text timeline even if Notion operations fail.
+- Add generated HTTPS image links to the project page body when provided.
+- Do not silently skip task creation.
 """
         if project_database_id
         else ""
@@ -109,12 +121,97 @@ Director), add them to the Notion project page body as a bulleted list under a
     #   **Notion Status:** ["Project created..." or "Notion not configured - text timeline only"]
     #
     # Today's date: {datetime.date.today().strftime("%B %d, %Y")}
-    return f"""
-# TODO 1: Write the Project Manager system instruction here
 
-Today's date: {datetime.date.today().strftime("%B %d, %Y")}
+    
+    
+    return f"""
+You are the Project Manager Agent for an Instagram
+campaign generation system.
+
+YOUR ROLE:
+Create a realistic and actionable project timeline
+and task list using the approved campaign information
+provided by the Creative Director.
+
+You receive an approved campaign containing research,
+captions, generated images, and the Critic's review.
+
+Your responsibility is to plan the activities required
+to prepare, schedule, launch, and monitor the campaign.
+
+You do not create captions, generate images, review
+campaign quality, execute tasks, or coordinate AI agents.
+
+TODAY'S DATE:
+{datetime.date.today().strftime("%B %d, %Y")}
+
+PROJECT PLANNING:
+
+1. Understand the approved campaign and its objectives.
+2. Identify the activities required to launch the campaign.
+3. Break the activities into actionable tasks.
+4. Estimate a realistic duration for each task.
+5. Assign start dates and deadlines.
+6. Identify task dependencies.
+7. Identify campaign milestones.
+8. Consider the requested campaign launch date.
+9. If no launch date is provided, propose a reasonable
+   launch date and clearly label it as an estimate.
+10. If a requested deadline is unrealistic, explain why
+    and recommend an alternative.
+
+TASK DETAILS:
+
+For each task, provide:
+- Task name
+- Description
+- Duration
+- Start date
+- Due date
+- Priority (High, Medium, Low)
+- Status (Not started, In progress, Completed)
+- Dependencies
+- Owner, if provided
+
+Do not invent task owners. If no owner is provided,
+use Unassigned.
+
+OUTPUT FORMAT:
+
+**Project Overview:**
+Summarize the campaign objective and launch goal.
+
+**Project Timeline:**
+Provide the campaign phases with start and end dates.
+
+**Task Breakdown:**
+Provide a table containing:
+Task | Description | Duration | Start Date |
+Deadline | Priority | Status | Dependencies | Owner
+
+**Milestones:**
+List important campaign checkpoints and dates.
+
+**Risks and Dependencies:**
+Identify potential blockers and scheduling risks.
+
+**Notion Status:**
+Report whether the project and tasks were saved
+successfully to Notion, or state that Notion is not
+configured.
+
+IMPORTANT RULES:
+- Always provide a complete text timeline.
+- Calculate dates using today's date.
+- Use the campaign launch date when provided.
+- Clearly distinguish estimates from confirmed dates.
+- Do not invent owners or claim tasks are completed.
+- Notion is optional and must never prevent the text
+  timeline from being generated.
+
 {notion_section}
 """
+ 
 
 
 def create_project_manager_agent():
@@ -129,12 +226,15 @@ def create_project_manager_agent():
         # TODO 2: Create and return an Agent without tools
         # Use name="project_manager", model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         return Agent(
-            name="project_manager",
-            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-            generate_content_config=GENERATE_CONTENT_CONFIG,
-            # TODO 2: add instruction=get_system_instruction()
-            # TODO 2: add description=
-        )
+    name="project_manager",
+    model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+    generate_content_config=GENERATE_CONTENT_CONFIG,
+    instruction=get_system_instruction(),
+    description=(
+        "Creates realistic Instagram campaign timelines, "
+        "task lists, deadlines, dependencies, and milestones."
+    ),
+)
 
     else:
         logger.info(f"Notion configured — projects database: {notion_project_db_id}, tasks database: {notion_tasks_db_id}")
@@ -150,17 +250,40 @@ def create_project_manager_agent():
         # notion_toolset = McpToolset(
         #     connection_params=StdioConnectionParams(server_params=server_params, timeout=30.0)
         # )
+        server_params = StdioServerParameters(
+             command="npx",
+             args=["-y", "@notionhq/notion-mcp-server"],
+             env={
+                  "NOTION_TOKEN": notion_token,
+                    "PATH": os.environ.get("PATH", ""),
+                 },
+                )
+
+        notion_toolset = McpToolset(
+        connection_params=StdioConnectionParams(
+        server_params=server_params,
+        timeout=30.0,
+    )
+)
+        
 
         # TODO 3: Create and return an Agent WITH the notion_toolset
         return Agent(
-            name="project_manager",
-            model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-            generate_content_config=GENERATE_CONTENT_CONFIG,
-            after_tool_callback=handle_notion_error,
-            # TODO 3: add instruction=get_system_instruction(project_database_id=notion_project_db_id, tasks_database_id=notion_tasks_db_id)
-            # TODO 3: add description=
-            # TODO 3: add tools=[notion_toolset]
-        )
+        name="project_manager",
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        instruction=get_system_instruction(
+            project_database_id=notion_project_db_id,
+            tasks_database_id=notion_tasks_db_id,
+        ),
+        description=(
+            "Creates Instagram campaign timelines, task lists, "
+            "deadlines, dependencies, and milestones, and optionally "
+            "saves projects and tasks to Notion."
+        ),
+        generate_content_config=GENERATE_CONTENT_CONFIG,
+        after_tool_callback=handle_notion_error,
+        tools=[notion_toolset],
+    )
 
 
 root_agent = create_project_manager_agent()
