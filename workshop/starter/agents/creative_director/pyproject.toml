@@ -9,6 +9,8 @@ dependencies = [
     "a2a-sdk",
     "python-dotenv>=1.0.0",
     "google-cloud-storage>=2.10.0",
+    "langgraph>=1.2.20",
+    "httpx>=0.28.1",
 ]
 
 [build-system]

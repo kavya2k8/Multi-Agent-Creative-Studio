@@ -1,35 +1,12 @@
-# Copyright 2026 Saoussen Chaabnia
-# Modifications Copyright 2026 Animesh
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 #!/usr/bin/env python3
+"""Deploy or test the Creative Director on Vertex AI Agent Engine.
+
+This script deploys ONLY the Creative Director. It never deploys, updates,
+or deletes the five existing Cloud Run specialist services.
+Run from the project root or invoke this file by its path.
 """
-Deploy Creative Director Orchestrator for Creative Director Agent Engine
-==========================================================
-This approach attempts to create and deploy in ONE step.
-Use this to test if single-stage deployment works or what error it produces.
 
-Usage:
-    # Deploy Agent Engine
-    python3 deploy_orchestrator.py --action deploy
-
-    # Test deployment
-    python3 deploy_orchestrator.py --action test --resource_name <resource_name>
-
-    # Cleanup (delete Agent Engine)
-    python3 deploy_orchestrator.py --action cleanup --resource_name <resource_name>
-"""
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -37,443 +14,362 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-import vertexai
 from dotenv import load_dotenv
-from vertexai import Client, agent_engines
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-# Load environment variables
-load_dotenv()
-
-# Configuration
-# CLOUD_RUN_REGION / GCP_REGION: real GCP region for Agent Runtime and Cloud Run.
-# GOOGLE_CLOUD_LOCATION may be "global" (for preview model routing) — do NOT use it here.
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "")
-PROJECT_NUMBER = os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER") or subprocess.check_output(
-    ["gcloud", "projects", "describe", PROJECT_ID, "--format=value(projectNumber)"],
-    text=True,
-).strip()
-LOCATION = (
-    os.getenv("CLOUD_RUN_REGION")
-    or os.getenv("GCP_REGION")
-    or os.getenv("LOCATION")
-    or os.getenv("REGION")
-    or "us-central1"
-)
-STAGING_BUCKET = f"gs://{PROJECT_ID}-agent-staging"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_ROOT / ".env"
+AGENTS_DIR = PROJECT_ROOT / "agents"
+DEPLOY_REGION = "us-central1"
+MODEL_LOCATION = "global"
+DEFAULT_PROJECT_ID = "ai-creative-studio-capstone"
+DEFAULT_PROJECT_NUMBER = "681944429183"
+STAGING_BUCKET_NAME = f"{DEFAULT_PROJECT_ID}-agent-staging"
 DISPLAY_NAME = "Creative Director"
 
-# Agent URLs
-COPYWRITER_URL = os.getenv("COPYWRITER_AGENT_URL", "")
-DESIGNER_URL = os.getenv("DESIGNER_AGENT_URL", "")
-STRATEGIST_URL = os.getenv("STRATEGIST_AGENT_URL", "")
-CRITIC_URL = os.getenv("CRITIC_AGENT_URL", "")
-PM_URL = os.getenv("PM_AGENT_URL", "")
+SPECIALIST_URLS = {
+    "STRATEGIST_AGENT_URL": "https://brand-strategist-681944429183.us-central1.run.app",
+    "COPYWRITER_AGENT_URL": "https://copywriter-681944429183.us-central1.run.app",
+    "DESIGNER_AGENT_URL": "https://designer-681944429183.us-central1.run.app",
+    "CRITIC_AGENT_URL": "https://critic-681944429183.us-central1.run.app",
+    "PM_AGENT_URL": "https://project-manager-681944429183.us-central1.run.app",
+}
+
+REQUIREMENTS = [
+    "google-cloud-aiplatform[agent_engines,adk]>=1.132.0,<2.0.0",
+    "google-adk[a2a]==1.31.1",
+    "google-genai>=1.70.0",
+    "google-cloud-storage>=2.10.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "cloudpickle>=3.0.0",
+    "langgraph>=1.2.20",
+    "httpx>=0.28.1",
+]
 
 
-def init_vertex_ai():
-    """Initialize Vertex AI SDK."""
-    vertexai.init(
-        project=PROJECT_ID,
-        location=LOCATION,
-        staging_bucket=STAGING_BUCKET,
+def load_configuration() -> dict[str, str]:
+    load_dotenv(ENV_FILE, override=False)
+
+    project_id = (
+        os.getenv("GOOGLE_CLOUD_PROJECT")
+        or os.getenv("GCP_PROJECT_ID")
+        or os.getenv("PROJECT_ID")
+        or DEFAULT_PROJECT_ID
     )
-    print("✓ Initialized Vertex AI")
-    print(f"  Project: {PROJECT_ID}")
-    print(f"  Location: {LOCATION}")
-    print(f"  Staging: {STAGING_BUCKET}")
+    project_number = (
+        os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER") or DEFAULT_PROJECT_NUMBER
+    )
+
+    config = {
+        "PROJECT_ID": project_id,
+        "PROJECT_NUMBER": project_number,
+        "AGENT_ENGINE_LOCATION": (
+            os.getenv("AGENT_ENGINE_LOCATION")
+            or os.getenv("CLOUD_RUN_REGION")
+            or DEPLOY_REGION
+        ),
+        "MODEL_LOCATION": os.getenv("GOOGLE_CLOUD_LOCATION") or MODEL_LOCATION,
+        "GEMINI_MODEL": os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview",
+        "GCS_IMAGES_BUCKET": (
+            os.getenv("GCS_IMAGES_BUCKET")
+            or f"{project_id}-campaign-images"
+        ),
+        "STAGING_BUCKET": (
+            os.getenv("AGENT_ENGINE_STAGING_BUCKET")
+            or f"{project_id}-agent-staging"
+        ),
+    }
+
+    for key, default_url in SPECIALIST_URLS.items():
+        config[key] = os.getenv(key) or default_url
+
+    missing = [key for key in SPECIALIST_URLS if not config.get(key)]
+    if missing:
+        raise ValueError(
+            "Missing specialist service URLs: " + ", ".join(missing)
+        )
+
+    return config
 
 
-def deploy_orchestrator(auto_deploy_specialists=False):
-    """Deploy using single-stage approach - create with all config at once.
+def run_gcloud(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    command = ["gcloud", *args]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Google Cloud CLI (gcloud) was not found. Install the Google Cloud CLI "
+            "and authenticate before deploying."
+        ) from exc
 
-    Args:
-        auto_deploy_specialists: If True, deploy all specialist agents first
-    """
+    if check and result.returncode != 0:
+        details = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"Command failed: {' '.join(command)}\n{details}")
+    return result
 
-    # NEW: Auto-deploy specialists first if requested
-    if auto_deploy_specialists:
-        print("\n" + "=" * 70)
-        print("AUTO-DEPLOY: Deploying all specialist agents first...")
-        print("=" * 70)
 
-        # Import specialist deployment module (now in deploy/)
-        import env_utils
-        from deploy_all_specialists import deploy_all_agents
+def ensure_staging_bucket(config: dict[str, str]) -> str:
+    bucket_uri = f"gs://{config['STAGING_BUCKET']}"
+    describe = run_gcloud(
+        ["storage", "buckets", "describe", bucket_uri,
+         f"--project={config['PROJECT_ID']}"],
+        check=False,
+    )
+    if describe.returncode == 0:
+        print(f"✓ Staging bucket exists: {bucket_uri}")
+        return bucket_uri
 
-        # Run specialist deployment
-        print("\n⏳ Deploying all 5 specialist agents to Cloud Run...")
-        agent_urls = asyncio.run(deploy_all_agents(PROJECT_ID, LOCATION))
+    print(f"Staging bucket not found. Creating {bucket_uri} in {config['AGENT_ENGINE_LOCATION']}...")
+    run_gcloud([
+        "storage", "buckets", "create", bucket_uri,
+        f"--location={config['AGENT_ENGINE_LOCATION']}",
+        "--uniform-bucket-level-access",
+        f"--project={config['PROJECT_ID']}",
+    ])
+    print(f"✓ Created staging bucket: {bucket_uri}")
+    return bucket_uri
 
-        if not agent_urls:
-            print("\n❌ ERROR: Failed to deploy specialist agents")
-            print("   Cannot proceed with orchestrator deployment without agent URLs")
-            sys.exit(1)
 
-        # Update global environment variables with collected URLs
-        env_vars_update = env_utils.format_env_vars_for_orchestrator(agent_urls)
-        os.environ.update(env_vars_update)
+def get_signing_service_account(config: dict[str, str]) -> str:
+    explicit = os.getenv("SIGNING_SERVICE_ACCOUNT")
+    if explicit:
+        return explicit
 
-        # Also update the module-level variables
-        global COPYWRITER_URL, DESIGNER_URL, STRATEGIST_URL, CRITIC_URL, PM_URL
-        COPYWRITER_URL = env_vars_update.get("COPYWRITER_AGENT_URL", "")
-        DESIGNER_URL = env_vars_update.get("DESIGNER_AGENT_URL", "")
-        STRATEGIST_URL = env_vars_update.get("STRATEGIST_AGENT_URL", "")
-        CRITIC_URL = env_vars_update.get("CRITIC_AGENT_URL", "")
-        PM_URL = env_vars_update.get("PM_AGENT_URL", "")
+    project_number = config["PROJECT_NUMBER"]
+    if not project_number:
+        result = run_gcloud([
+            "projects", "describe", config["PROJECT_ID"],
+            "--format=value(projectNumber)",
+        ])
+        project_number = result.stdout.strip()
 
-        print("\n✓ All specialist agents deployed!")
-        print("\nCollected URLs:")
-        for name, url in agent_urls.items():
-            print(f"  • {name}: {url}")
+    return f"{project_number}-compute@developer.gserviceaccount.com"
 
-        print("\n" + "=" * 70)
 
-    print("\n" + "=" * 70)
-    print("DEPLOYING: Creative Director Agent Engine")
-    print("=" * 70)
-    print("\nAttempting to create AND deploy in ONE step...")
-    print("This will help us understand if single-stage deployment works,")
-    print("or what specific error occurs that requires two-stage approach.")
+def save_env_values(values: dict[str, str]) -> None:
+    """Update only named keys in the root .env; preserve all other entries."""
+    existing_lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
+    output: list[str] = []
+    replaced: set[str] = set()
 
-    init_vertex_ai()
+    for line in existing_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            output.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in values:
+            output.append(f"{key}={values[key]}")
+            replaced.add(key)
+        else:
+            output.append(line)
 
-    # Import the app from agent.py
-    sys.path.insert(0, str(project_root / "agents"))
-    from creative_director.agent import root_app  # App object with compaction config
+    for key, value in values.items():
+        if key not in replaced:
+            output.append(f"{key}={value}")
 
-    # Wrap App in AdkApp for Agent Engine deployment.
+    temp_path = ENV_FILE.with_suffix(".env.tmp")
+    temp_path.write_text("\n".join(output) + "\n")
+    temp_path.replace(ENV_FILE)
+    print(f"✓ Saved Agent Engine details to {ENV_FILE}")
+
+
+def deploy() -> str:
+    config = load_configuration()
+
+    if not (AGENTS_DIR / "creative_director" / "agent.py").exists():
+        raise FileNotFoundError(
+            "Could not find agents/creative_director/agent.py. "
+            "Place this deploy folder beside your agents folder."
+        )
+
+    if not (AGENTS_DIR / "creative_director" / "__init__.py").exists():
+        raise FileNotFoundError(
+            "Missing agents/creative_director/__init__.py."
+        )
+
+    print("\nCreative Director → Vertex AI Agent Engine")
+    print(f"Project: {config['PROJECT_ID']}")
+    print(f"Agent Engine region: {config['AGENT_ENGINE_LOCATION']}")
+    print(f"Gemini model: {config['GEMINI_MODEL']}")
+    print("\nThe five existing Cloud Run specialists will NOT be redeployed:")
+    for key, url in SPECIALIST_URLS.items():
+        print(f"  {key}: {config[key]}")
+
+    current_resource = os.getenv("AGENT_ENGINE_RESOURCE_NAME")
+    if current_resource:
+        print("\nAn Agent Engine resource is already recorded in .env:")
+        print(f"  {current_resource}")
+        print("This deployment creates a NEW Agent Engine resource; it does not delete or overwrite the old one.")
+
+    answer = input("\nProceed with creating the Agent Engine resource? Type YES to continue: ").strip()
+    if answer != "YES":
+        print("Deployment cancelled. No cloud resources were changed.")
+        return ""
+
+    staging_bucket = ensure_staging_bucket(config)
+
+    # The project package uses relative imports (creative_director.*).
+    # Add the agents directory to sys.path and package the folder itself.
+    sys.path.insert(0, str(AGENTS_DIR))
+    from creative_director.agent import root_app
+
+    import vertexai
+    from vertexai import agent_engines
+
+    vertexai.init(
+        project=config["PROJECT_ID"],
+        location=config["AGENT_ENGINE_LOCATION"],
+        staging_bucket=staging_bucket,
+    )
+
     adk_app = agent_engines.AdkApp(
         app=root_app,
         enable_tracing=True,
     )
 
-    # =========================================================================
-    # : Create AND Deploy with ALL config at once
-    # =========================================================================
-    print("\n⏳ Creating Agent Engine with full configuration...")
-    print("   (Single API call with all env vars and requirements)")
+    env_vars = {
+        **{key: config[key] for key in SPECIALIST_URLS},
+        "GOOGLE_CLOUD_LOCATION": config["MODEL_LOCATION"],
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "GEMINI_MODEL": config["GEMINI_MODEL"],
+        "GCS_IMAGES_BUCKET": config["GCS_IMAGES_BUCKET"],
+        "SIGNING_SERVICE_ACCOUNT": get_signing_service_account(config),
+    }
 
-    print("\n  Configuration:")
-    print(f"    - Display Name: {DISPLAY_NAME}")
-    print("    - Requirements:")
-    print("      • google-cloud-aiplatform[agent_engines]>=1.132.0,<2.0.0")
-    print("      • google-adk[a2a]==1.31.1")
-    print("      • google-genai>=1.70.0")
-    print("      • google-cloud-storage>=2.10.0")
-    print("      • python-dotenv>=1.0.0")
-    print("      • pydantic>=2.0.0")
-    print("      • cloudpickle>=3.0.0")
-    print("    - Environment Variables:")
-    print(f"      • COPYWRITER_AGENT_URL={COPYWRITER_URL or '(not set)'}")
-    print(f"      • DESIGNER_AGENT_URL={DESIGNER_URL or '(not set)'}")
-    print(f"      • STRATEGIST_AGENT_URL={STRATEGIST_URL or '(not set)'}")
-    print(f"      • CRITIC_AGENT_URL={CRITIC_URL or '(not set)'}")
-    print(f"      • PM_AGENT_URL={PM_URL or '(not set)'}")
-
+    print("\nSubmitting deployment to Agent Engine. This can take several minutes...")
+    original_cwd = Path.cwd()
     try:
-        # chdir to agents/ so extra_packages=["creative_director"] resolves as a
-        # relative path - this is how the module-level agent_engines.create() API
-        # discovers and tarballs local packages for upload to the staging bucket.
-        os.chdir(project_root / "agents")
-
-        agent_engine_resource = agent_engines.create(
+        os.chdir(AGENTS_DIR)
+        remote_app = agent_engines.create(
             agent_engine=adk_app,
             display_name=DISPLAY_NAME,
-            requirements=[
-                "google-cloud-aiplatform[agent_engines]>=1.132.0,<2.0.0",
-                "google-adk[a2a]==1.31.1",
-                "google-genai>=1.70.0",
-                "google-cloud-storage>=2.10.0",
-                "python-dotenv>=1.0.0",
-                "pydantic>=2.0.0",
-                "cloudpickle>=3.0.0",
-            ],
+            requirements=REQUIREMENTS,
             extra_packages=["creative_director"],
-            env_vars={
-                "COPYWRITER_AGENT_URL": COPYWRITER_URL,
-                "DESIGNER_AGENT_URL": DESIGNER_URL,
-                "STRATEGIST_AGENT_URL": STRATEGIST_URL,
-                "CRITIC_AGENT_URL": CRITIC_URL,
-                "PM_AGENT_URL": PM_URL,
-                "GEMINI_MODEL": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-                # Agent Runtime auto-sets GOOGLE_CLOUD_LOCATION to the deployment
-                # region (us-central1), but preview models require "global".
-                # Explicitly override so the orchestrator can reach the model.
-                "GOOGLE_CLOUD_LOCATION": os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
-                "GOOGLE_GENAI_USE_VERTEXAI": "true",
-                "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
-                # SA used to sign GCS image URLs - required for get_image_links tool.
-                "SIGNING_SERVICE_ACCOUNT": f"{PROJECT_NUMBER}-compute@developer.gserviceaccount.com",
-            },
+            env_vars=env_vars,
+        )
+    finally:
+        os.chdir(original_cwd)
+
+    resource_name = getattr(remote_app, "resource_name", None)
+    if not resource_name:
+        api_resource = getattr(remote_app, "api_resource", None)
+        resource_name = getattr(api_resource, "name", None)
+
+    if not resource_name:
+        raise RuntimeError(
+            "Agent Engine create returned, but the resource name could not be read. "
+            "Check Vertex AI > Agent Engine in the Cloud Console before retrying."
         )
 
-        # Extract resource name and ID
-        resource_name = agent_engine_resource.resource_name
-        agent_engine_id = resource_name.split("/")[-1]
+    engine_id = resource_name.rstrip("/").split("/")[-1]
+    save_env_values({
+        "AGENT_ENGINE_RESOURCE_NAME": resource_name,
+        "AGENT_ENGINE_ID": engine_id,
+        "AGENT_ENGINE_LOCATION": config["AGENT_ENGINE_LOCATION"],
+        "AGENT_ENGINE_STAGING_BUCKET": config["STAGING_BUCKET"],
+    })
 
-        print("\n" + "=" * 70)
-        print("✅ DEPLOYING SUCCESSFUL!")
-        print("=" * 70)
-        print("\n🎉 Success! Single-stage deployment works fine!")
-        print("\nThis means the two-stage pattern may not be necessary,")
-        print("or the reason for it is different than we thought.")
-
-        print(f"\nResource Name: {resource_name}")
-        print(f"Agent Engine ID: {agent_engine_id}")
-
-        print("\n✓ Agent deployed with environment variables!")
-        print(f"  - COPYWRITER_AGENT_URL={COPYWRITER_URL or '(not set)'}")
-        print(f"  - DESIGNER_AGENT_URL={DESIGNER_URL or '(not set)'}")
-        print(f"  - STRATEGIST_AGENT_URL={STRATEGIST_URL or '(not set)'}")
-        print(f"  - CRITIC_AGENT_URL={CRITIC_URL or '(not set)'}")
-        print(f"  - PM_AGENT_URL={PM_URL or '(not set)'}")
-
-        # Write resource name and ID to .env in-place
-        env_path = Path(__file__).parent.parent / ".env"
-        if env_path.exists():
-            lines = env_path.read_text().splitlines(keepends=True)
-            updates = {
-                "AGENT_ENGINE_RESOURCE_NAME": resource_name,
-                "AGENT_ENGINE_ID": agent_engine_id,
-            }
-            updated = []
-            replaced = set()
-            for line in lines:
-                key = line.split("=", 1)[0].strip()
-                if key in updates:
-                    updated.append(f"{key}={updates[key]}\n")
-                    replaced.add(key)
-                else:
-                    updated.append(line)
-            for key, value in updates.items():
-                if key not in replaced:
-                    updated.append(f"{key}={value}\n")
-            env_path.write_text("".join(updated))
-            print(f"\n✓ Updated .env with Agent Engine resource name and ID")
-        else:
-            print("\nUpdate your .env file with:")
-            print(f'AGENT_ENGINE_RESOURCE_NAME="{resource_name}"')
-            print(f'AGENT_ENGINE_ID="{agent_engine_id}"')
-
-        print("\nView in Cloud Console:")
-        print(
-            f"https://console.cloud.google.com/vertex-ai/reasoning-engines?project={PROJECT_ID}"
-        )
-
-        print("\n💡 To test the deployment, run:")
-        print(f'python3 {__file__} --action test --resource_name "{resource_name}"')
-
-        return agent_engine_resource, resource_name
-
-    except Exception as e:
-        print("\n" + "=" * 70)
-        print("❌ DEPLOYING FAILED!")
-        print("=" * 70)
-        print("\n🔍 This is the error that requires two-stage deployment:")
-        print(f"\nError Type: {type(e).__name__}")
-        print(f"Error Message: {str(e)}")
-
-        # Print detailed error info
-        import traceback
-
-        print("\nFull Traceback:")
-        print(traceback.format_exc())
-
-        print("\n" + "=" * 70)
-        print("💡 ANALYSIS:")
-        print("=" * 70)
-        print("\nThis error explains why two-stage deployment is needed.")
-        print("The two-stage approach works around this issue by:")
-        print("1. Creating the resource first (gets the resource ID)")
-        print("2. Then updating it with the agent code and env vars")
-
-        raise
-
-
-# =============================================================================
-# TESTING
-# =============================================================================
-
-
-async def test_deployed_agent(resource_name: str):
-    """Test the deployed agent."""
-    print("\n" + "=" * 70)
-    print("TESTING DEPLOYED AGENT ()")
-    print("=" * 70)
-
-    init_vertex_ai()
-
-    # Connect to deployed agent
-    remote_app = agent_engines.get(resource_name)
-    print(f"✓ Connected to: {resource_name}")
-
-    # Create session
-    session = await remote_app.async_create_session(user_id="test_user")
-    print(f"✓ Created session: {session['id']}")
-
-    # Test query
-    test_query = """Create a social media campaign for:
-    - Product: Eco-friendly coffee brand "GreenBrew"
-    - Target Audience: Gen-Z, environmentally conscious, 18-25 years old
-    - Platform: Instagram
-    - Goal: Brand awareness and drive website traffic
-    """
-    print(f"\n{'─' * 70}")
-    print(f"USER: {test_query}")
-    print(f"{'─' * 70}\n")
-
-    response_count = 0
-    async for event in remote_app.async_stream_query(
-        user_id="test_user",
-        session_id=session["id"],
-        message=test_query,
-    ):
-        response_count += 1
-        print(f"Event {response_count}: {event}")  # Debug: show all events
-        content = event.get("content", {})
-        parts = content.get("parts", [])
-        for part in parts:
-            if part.get("text") and not part.get("function_call"):
-                print(f"AGENT: {part['text']}")
-            elif part.get("function_call"):
-                print(f"FUNCTION CALL: {part.get('function_call')}")
-
-    print("\n" + "=" * 70)
-    print("✓ Test complete!")
-    print("=" * 70)
-
-
-# =============================================================================
-# CLEANUP
-# =============================================================================
-
-
-def cleanup_agent_engine(resource_name: str):
-    """Delete the deployed Agent Engine resource."""
-    print("\n" + "=" * 70)
-    print("CLEANUP: Deleting Agent Engine (Single-Stage)")
-    print("=" * 70)
-
-    init_vertex_ai()
-
-    print("\n⚠️  WARNING: This will DELETE the following resource:")
-    print(f"   {resource_name}")
-    print()
-
-    # Confirm deletion
-    confirmation = input(
-        "⚠️  Are you SURE you want to delete this Agent Engine? (yes/no): "
+    print("\n✓ Creative Director deployment submitted successfully.")
+    print(f"Resource: {resource_name}")
+    print(f"Agent Engine ID: {engine_id}")
+    print(
+        "Next: run this script with --action test to verify that the deployed "
+        "agent can respond."
     )
-    if confirmation.lower() != "yes":
-        print("\n❌ Cleanup cancelled.")
-        return
+    return resource_name
 
-    print(f"\n🗑️  Deleting Agent Engine: {resource_name}")
 
-    try:
-        # Initialize client
-        client = Client(project=PROJECT_ID, location=LOCATION)
+async def test_deployed_agent(resource_name: str) -> None:
+    config = load_configuration()
 
-        # Delete the agent engine
-        client.agent_engines.delete(resource_name=resource_name)
+    import vertexai
+    from vertexai import agent_engines
 
-        print("\n" + "=" * 70)
-        print("✅ AGENT ENGINE DELETED SUCCESSFULLY!")
-        print("=" * 70)
-        print(f"\n✓ Deleted: {resource_name}")
-        print("\n💡 Don't forget to:")
-        print("   - Remove AGENT_ENGINE_RESOURCE_NAME from your .env file")
-        print("   - Remove AGENT_ENGINE_ID from your .env file")
+    vertexai.init(
+        project=config["PROJECT_ID"],
+        location=config["AGENT_ENGINE_LOCATION"],
+        staging_bucket=f"gs://{config['STAGING_BUCKET']}",
+    )
 
-    except Exception as e:
-        print("\n" + "=" * 70)
-        print("❌ CLEANUP FAILED!")
-        print("=" * 70)
-        print(f"\nError: {str(e)}")
-        print("\nYou can also delete the Agent Engine manually from:")
-        print(
-            f"https://console.cloud.google.com/vertex-ai/reasoning-engines?project={PROJECT_ID}"
+    print(f"Connecting to Agent Engine: {resource_name}")
+    remote_app = agent_engines.get(resource_name)
+
+    user_id = "creative-studio-deployment-test"
+    session = await remote_app.async_create_session(user_id=user_id)
+    session_id = session["id"]
+    print(f"✓ Session created: {session_id}")
+
+    print("Sending a lightweight connectivity test...")
+    received_text: list[str] = []
+    async for event in remote_app.async_stream_query(
+        user_id=user_id,
+        session_id=session_id,
+        message="Reply with exactly: CREATIVE_DIRECTOR_READY",
+    ):
+        content = event.get("content", {}) if isinstance(event, dict) else {}
+        for part in content.get("parts", []):
+            value = part.get("text")
+            if value:
+                received_text.append(value)
+
+    response = "\n".join(received_text).strip()
+    if not response:
+        raise RuntimeError(
+            "The Agent Engine did not return text. Check the Agent Engine logs "
+            "and deployment status in Google Cloud Console."
         )
-        raise
+
+    print("\nAgent response:")
+    print(response)
+    print("\n✓ Agent Engine connectivity test completed.")
+    print("Note: this checks basic agent response, not the full five-specialist campaign workflow.")
 
 
-# =============================================================================
-# CLI
-# =============================================================================
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Deploy Creative Director Orchestrator for Creative Director Agent Engine (Testing)"
+        description="Deploy or test the Creative Director on Vertex AI Agent Engine."
     )
     parser.add_argument(
         "--action",
-        choices=["deploy", "test", "cleanup"],
+        choices=["deploy", "test"],
         default="deploy",
-        help="Action to perform: deploy (create Agent Engine), test (test deployment), cleanup (delete Agent Engine)",
+        help="deploy creates a new Agent Engine resource; test checks an existing one.",
     )
     parser.add_argument(
-        "--resource_name",
-        type=str,
-        help="Resource name for test/cleanup actions (e.g., projects/.../reasoningEngines/...)",
+        "--resource-name",
+        default=None,
+        help="Full Agent Engine resource name. For test, defaults to .env.",
     )
-    parser.add_argument(
-        "--auto-deploy-specialists",
-        action="store_true",
-        help="Automatically deploy all specialist agents to Cloud Run before deploying orchestrator",
-    )
-
     args = parser.parse_args()
 
-    if args.action == "deploy":
-        try:
-            remote_app, resource_name = deploy_orchestrator(
-                auto_deploy_specialists=args.auto_deploy_specialists
+    try:
+        if args.action == "deploy":
+            deploy()
+        else:
+            load_dotenv(ENV_FILE, override=False)
+            resource_name = (
+                args.resource_name or os.getenv("AGENT_ENGINE_RESOURCE_NAME")
             )
-            print("\n💡 To test the deployment, run:")
-            print(f'python3 {__file__} --action test --resource_name "{resource_name}"')
-            print("\n💡 To delete the deployment, run:")
-            print(
-                f'python3 {__file__} --action cleanup --resource_name "{resource_name}"'
-            )
-        except Exception:
-            print("\n\n" + "=" * 70)
-            print("CONCLUSION:")
-            print("=" * 70)
-            print("\nSingle-stage deployment failed with the error above.")
-            print("This confirms that two-stage deployment is necessary.")
-            print("\nPlease check error details above and retry.")
-            sys.exit(1)
-
-    elif args.action == "test":
-        if not args.resource_name:
-            # Try to get from env
-            args.resource_name = os.getenv("AGENT_ENGINE_RESOURCE_NAME")
-            if not args.resource_name:
-                print("ERROR: --resource_name required for test")
-                print("   Or set AGENT_ENGINE_RESOURCE_NAME in .env")
-                return
-        asyncio.run(test_deployed_agent(args.resource_name))
-
-    elif args.action == "cleanup":
-        if not args.resource_name:
-            # Try to get from env
-            args.resource_name = os.getenv("AGENT_ENGINE_RESOURCE_NAME")
-            if not args.resource_name:
-                print("ERROR: --resource_name required for cleanup")
-                print("   Or set AGENT_ENGINE_RESOURCE_NAME in .env")
-                print("\nUsage:")
-                print(
-                    f'  python3 {__file__} --action cleanup --resource_name "projects/.../reasoningEngines/..."'
+            if not resource_name:
+                raise ValueError(
+                    "No Agent Engine resource found. Deploy first or pass --resource-name."
                 )
-                return
-        cleanup_agent_engine(args.resource_name)
+            asyncio.run(test_deployed_agent(resource_name))
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
+        raise SystemExit(130)
+    except Exception as exc:
+        print(f"\nDEPLOYMENT ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
