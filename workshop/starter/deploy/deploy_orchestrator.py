@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Deploy or test the Creative Director on Vertex AI Agent Engine.
+"""Update or test the existing Creative Director on Vertex AI Agent Engine.
 
-This script deploys ONLY the Creative Director. It never deploys, updates,
-or deletes the five existing Cloud Run specialist services.
+This script updates ONLY the existing Creative Director Agent Engine resource.
+It does not deploy, update, or delete the five existing Cloud Run specialists.
 Run from the project root or invoke this file by its path.
 """
 
@@ -205,12 +205,27 @@ def deploy() -> str:
         print(f"  {key}: {config[key]}")
 
     current_resource = os.getenv("AGENT_ENGINE_RESOURCE_NAME")
-    if current_resource:
-        print("\nAn Agent Engine resource is already recorded in .env:")
-        print(f"  {current_resource}")
-        print("This deployment creates a NEW Agent Engine resource; it does not delete or overwrite the old one.")
+    if not current_resource:
+        raise ValueError(
+            "AGENT_ENGINE_RESOURCE_NAME is missing from .env. "
+            "Refusing to create a new Agent Engine resource."
+        )
 
-    answer = input("\nProceed with creating the Agent Engine resource? Type YES to continue: ").strip()
+    expected_prefix = (
+    f"projects/{config['PROJECT_NUMBER']}/locations/"
+    f"{config['AGENT_ENGINE_LOCATION']}/reasoningEngines/"
+)
+    if not current_resource.startswith(expected_prefix):
+        raise ValueError(
+            "The resource in AGENT_ENGINE_RESOURCE_NAME does not match the "
+            f"configured project and region. Expected prefix: {expected_prefix}"
+        )
+
+    print("\nExisting Agent Engine resource to update:")
+    print(f"  {current_resource}")
+    answer = input(
+        "\nUpdate this existing Creative Director resource? Type YES to continue: "
+    ).strip()
     if answer != "YES":
         print("Deployment cancelled. No cloud resources were changed.")
         return ""
@@ -245,11 +260,12 @@ def deploy() -> str:
         "SIGNING_SERVICE_ACCOUNT": get_signing_service_account(config),
     }
 
-    print("\nSubmitting deployment to Agent Engine. This can take several minutes...")
+    print("\nSubmitting update to the existing Agent Engine. This can take several minutes...")
     original_cwd = Path.cwd()
     try:
         os.chdir(AGENTS_DIR)
-        remote_app = agent_engines.create(
+        remote_app = agent_engines.update(
+            resource_name=current_resource,
             agent_engine=adk_app,
             display_name=DISPLAY_NAME,
             requirements=REQUIREMENTS,
@@ -266,7 +282,7 @@ def deploy() -> str:
 
     if not resource_name:
         raise RuntimeError(
-            "Agent Engine create returned, but the resource name could not be read. "
+            "Agent Engine update returned, but the resource name could not be read. "
             "Check Vertex AI > Agent Engine in the Cloud Console before retrying."
         )
 
@@ -278,7 +294,7 @@ def deploy() -> str:
         "AGENT_ENGINE_STAGING_BUCKET": config["STAGING_BUCKET"],
     })
 
-    print("\n✓ Creative Director deployment submitted successfully.")
+    print("\n✓ Creative Director update submitted successfully.")
     print(f"Resource: {resource_name}")
     print(f"Agent Engine ID: {engine_id}")
     print(
@@ -336,13 +352,13 @@ async def test_deployed_agent(resource_name: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Deploy or test the Creative Director on Vertex AI Agent Engine."
+        description="Update or test the Creative Director on Vertex AI Agent Engine."
     )
     parser.add_argument(
         "--action",
         choices=["deploy", "test"],
         default="deploy",
-        help="deploy creates a new Agent Engine resource; test checks an existing one.",
+        help="update refreshes the existing Agent Engine resource; test checks it.",
     )
     parser.add_argument(
         "--resource-name",

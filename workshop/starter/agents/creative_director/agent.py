@@ -16,21 +16,13 @@ import time
 
 import uuid
 
-
-
 from typing import Annotated, TypedDict
 
 from urllib.parse import urlparse
 
-
-
 import httpx
 
-
-
 from dotenv import load_dotenv
-
-
 
 from google.adk.agents import Agent
 
@@ -42,17 +34,11 @@ from google.adk.tools import FunctionTool, ToolContext
 
 from google.genai import types
 
-
-
 from langgraph.graph import StateGraph, START, END
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-
-
 load_dotenv()
-
-
 
 try:
 
@@ -70,33 +56,21 @@ except ImportError:
 
     from get_image_links_tool import get_image_links
 
-
-
-
-
 # ============================================================
 
 # LOGGING
 
 # ============================================================
 
-
-
 logger = logging.getLogger("ai_creative_studio.creative_director")
 
 logger.setLevel(logging.INFO)
-
-
-
-
 
 # ============================================================
 
 # CONFIGURATION
 
 # ============================================================
-
-
 
 MODEL_NAME = os.getenv(
 
@@ -106,15 +80,11 @@ MODEL_NAME = os.getenv(
 
 )
 
-
-
 MAX_OUTPUT_TOKENS = int(
 
     os.getenv("CREATIVE_DIRECTOR_MAX_OUTPUT_TOKENS", "4096")
 
 )
-
-
 
 A2A_TIMEOUT_SECONDS = float(
 
@@ -122,25 +92,17 @@ A2A_TIMEOUT_SECONDS = float(
 
 )
 
-
-
 A2A_POLL_INTERVAL_SECONDS = float(
 
     os.getenv("A2A_POLL_INTERVAL_SECONDS", "2")
 
 )
 
-
-
 A2A_MAX_POLL_ATTEMPTS = int(
 
     os.getenv("A2A_MAX_POLL_ATTEMPTS", "120")
 
 )
-
-
-
-
 
 SPECIALIST_CONFIGS = {
 
@@ -156,27 +118,17 @@ SPECIALIST_CONFIGS = {
 
 }
 
-
-
-
-
 # ============================================================
 
 # LANGGRAPH STATE
 
 # ============================================================
 
-
-
 class CampaignState(TypedDict, total=False):
-
-
 
     campaign_id: str
 
     campaign_brief: str
-
-
 
     brand_strategy: str
 
@@ -196,27 +148,17 @@ class CampaignState(TypedDict, total=False):
 
     project_plan: str
 
-
-
     image_uris: list[str]
 
     image_urls: list[str]
-
-
 
     execution_log: Annotated[list[str], operator.add]
 
     errors: Annotated[list[str], operator.add]
 
-
-
     status: str
 
     final_response: str
-
-
-
-
 
 # ============================================================
 
@@ -224,19 +166,11 @@ class CampaignState(TypedDict, total=False):
 
 # ============================================================
 
-
-
 def get_agent_url(agent_name: str) -> str:
-
-
 
     env_name = SPECIALIST_CONFIGS[agent_name]
 
-
-
     agent_url = os.getenv(env_name, "").strip().rstrip("/")
-
-
 
     if not agent_url:
 
@@ -246,11 +180,7 @@ def get_agent_url(agent_name: str) -> str:
 
         )
 
-
-
     parsed = urlparse(agent_url)
-
-
 
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
 
@@ -260,8 +190,6 @@ def get_agent_url(agent_name: str) -> str:
 
         )
 
-
-
     if parsed.query or parsed.fragment:
 
         raise ValueError(
@@ -270,13 +198,7 @@ def get_agent_url(agent_name: str) -> str:
 
         )
 
-
-
     return agent_url
-
-
-
-
 
 # ============================================================
 
@@ -284,11 +206,7 @@ def get_agent_url(agent_name: str) -> str:
 
 # ============================================================
 
-
-
 def normalize_task_state(value: str) -> str:
-
-
 
     return (
 
@@ -299,10 +217,6 @@ def normalize_task_state(value: str) -> str:
         .replace("taskstate.", "")
 
     )
-
-
-
-
 
 def extract_parts(parts: list, collected: list):
 
@@ -326,10 +240,6 @@ def extract_parts(parts: list, collected: list):
 
             collected.append(value.strip())
 
-
-
-
-
 def _as_dict(value):
 
     """Convert an SDK/Pydantic object to a dictionary when possible."""
@@ -350,10 +260,6 @@ def _as_dict(value):
 
     return {}
 
-
-
-
-
 def extract_a2a_text(response_data: dict) -> str:
 
     """Extract text from A2A JSON-RPC messages, tasks, history and artifacts."""
@@ -364,8 +270,6 @@ def extract_a2a_text(response_data: dict) -> str:
 
     collected = []
 
-
-
     # Direct A2A Message response.
 
     extract_parts(result.get("parts", []), collected)
@@ -373,8 +277,6 @@ def extract_a2a_text(response_data: dict) -> str:
     message = _as_dict(result.get("message"))
 
     extract_parts(message.get("parts", []), collected)
-
-
 
     # A2A Task response.
 
@@ -384,8 +286,6 @@ def extract_a2a_text(response_data: dict) -> str:
 
         task = result
 
-
-
     if task:
 
         status = _as_dict(task.get("status"))
@@ -394,23 +294,17 @@ def extract_a2a_text(response_data: dict) -> str:
 
         extract_parts(status_message.get("parts", []), collected)
 
-
-
         for artifact in task.get("artifacts", []) or []:
 
             artifact = _as_dict(artifact)
 
             extract_parts(artifact.get("parts", []), collected)
 
-
-
         for history_message in task.get("history", []) or []:
 
             history_message = _as_dict(history_message)
 
             extract_parts(history_message.get("parts", []), collected)
-
-
 
     # A few implementations add an additional response/data/output wrapper.
 
@@ -424,21 +318,13 @@ def extract_a2a_text(response_data: dict) -> str:
 
         extract_parts(nested_message.get("parts", []), collected)
 
-
-
-    return "\\\n".join(dict.fromkeys(item for item in collected if item)).strip()
-
-
-
-
+    return "\\\\\n".join(dict.fromkeys(item for item in collected if item)).strip()
 
 # ============================================================
 
 # A2A SPECIALIST COMMUNICATION
 
 # ============================================================
-
-
 
 async def call_specialist(
 
@@ -454,23 +340,15 @@ async def call_specialist(
 
     Invoke one remote ADK specialist through A2A.
 
-
-
     No automatic application-level retries are performed.
 
     This avoids accidentally repeating image generation.
 
     """
 
-
-
     agent_url = get_agent_url(agent_name)
 
-
-
     request_id = str(uuid.uuid4())
-
-
 
     payload = {
 
@@ -508,11 +386,7 @@ async def call_specialist(
 
     }
 
-
-
     started = time.perf_counter()
-
-
 
     logger.info(
 
@@ -526,8 +400,6 @@ async def call_specialist(
 
     )
 
-
-
     logger.info(
 
         "A2A START | agent=%s | campaign=%s",
@@ -538,15 +410,9 @@ async def call_specialist(
 
     )
 
-
-
     timeout = httpx.Timeout(A2A_TIMEOUT_SECONDS)
 
-
-
     async with httpx.AsyncClient(timeout=timeout) as client:
-
-
 
         response = await client.post(
 
@@ -556,15 +422,9 @@ async def call_specialist(
 
         )
 
-
-
         response.raise_for_status()
 
-
-
         data = response.json()
-
-
 
         logger.info(
 
@@ -586,8 +446,6 @@ async def call_specialist(
 
         )
 
-
-
         if data.get("error"):
 
             raise RuntimeError(
@@ -596,11 +454,7 @@ async def call_specialist(
 
             )
 
-
-
         result = data.get("result", {})
-
-
 
         if not isinstance(result, dict):
 
@@ -610,29 +464,19 @@ async def call_specialist(
 
             )
 
-
-
         task = result.get("task")
-
-
 
         # Poll only if the response contains a non-terminal task.
 
         if isinstance(task, dict):
 
-
-
             task_id = task.get("id")
-
-
 
             task_state = normalize_task_state(
 
                 task.get("status", {}).get("state", "")
 
             )
-
-
 
             terminal_states = {
 
@@ -646,23 +490,15 @@ async def call_specialist(
 
             }
 
-
-
             if task_id and task_state not in terminal_states:
 
-
-
                 for attempt in range(A2A_MAX_POLL_ATTEMPTS):
-
-
 
                     await asyncio.sleep(
 
                         A2A_POLL_INTERVAL_SECONDS
 
                     )
-
-
 
                     poll_payload = {
 
@@ -680,8 +516,6 @@ async def call_specialist(
 
                     }
 
-
-
                     poll_response = await client.post(
 
                         agent_url,
@@ -690,15 +524,9 @@ async def call_specialist(
 
                     )
 
-
-
                     poll_response.raise_for_status()
 
-
-
                     poll_data = poll_response.json()
-
-
 
                     logger.info(
 
@@ -716,8 +544,6 @@ async def call_specialist(
 
                     )
 
-
-
                     if poll_data.get("error"):
 
                         raise RuntimeError(
@@ -728,11 +554,7 @@ async def call_specialist(
 
                         )
 
-
-
                     poll_result = poll_data.get("result", {})
-
-
 
                     task = poll_result.get(
 
@@ -742,15 +564,11 @@ async def call_specialist(
 
                     )
 
-
-
                     result = {
 
                         "task": task,
 
                     }
-
-
 
                     task_state = normalize_task_state(
 
@@ -758,13 +576,9 @@ async def call_specialist(
 
                     )
 
-
-
                     if task_state in terminal_states:
 
                         break
-
-
 
                 else:
 
@@ -776,25 +590,17 @@ async def call_specialist(
 
                     )
 
-
-
         # Check the final task state.
 
         task = result.get("task")
 
-
-
         if isinstance(task, dict):
-
-
 
             final_state = normalize_task_state(
 
                 task.get("status", {}).get("state", "")
 
             )
-
-
 
             if final_state in {
 
@@ -814,15 +620,9 @@ async def call_specialist(
 
                 )
 
-
-
         output = extract_a2a_text(result)
 
-
-
     elapsed = time.perf_counter() - started
-
-
 
     logger.info(
 
@@ -833,8 +633,6 @@ async def call_specialist(
         elapsed,
 
     )
-
-
 
     if not output:
 
@@ -858,13 +656,7 @@ async def call_specialist(
 
         )
 
-
-
     return output
-
-
-
-
 
 # ============================================================
 
@@ -872,23 +664,17 @@ async def call_specialist(
 
 # ============================================================
 
-
-
 def _clean_image_reference(value: str) -> str:
 
     """Remove Markdown wrappers and trailing punctuation from an image reference."""
 
     value = (value or "").strip().strip("`\"'")
 
-    value = re.sub(r"^[<(\\[]+", "", value)
+    value = re.sub(r"^[<(*\[]+", "", value)
 
-    value = re.sub(r"[)>\\]}.!,;:]+$", "", value)
+    value = re.sub(r"[)>*\]}.,!;:]+$", "", value)
 
     return value
-
-
-
-
 
 def extract_image_assets(text: str) -> tuple[list[str], list[str]]:
 
@@ -920,21 +706,11 @@ def extract_image_assets(text: str) -> tuple[list[str], list[str]]:
 
     return list(dict.fromkeys(gcs_uris)), list(dict.fromkeys(https_urls))
 
-
-
-
-
 def extract_image_uris(text: str) -> list[str]:
 
     """Backward-compatible helper: return canonical GCS URIs only."""
 
     return extract_image_assets(text)[0]
-
-
-
-
-
-
 
 def compact_text(value: str, max_chars: int, label: str = "content") -> str:
 
@@ -954,11 +730,7 @@ def compact_text(value: str, max_chars: int, label: str = "content") -> str:
 
     )
 
-    return value[:max_chars].rstrip() + f"\\\n\\\n[{label} truncated for context efficiency]"
-
-
-
-
+    return value[:max_chars].rstrip() + f"\\\\\n\\\\\n[{label} truncated for context efficiency]"
 
 # ============================================================
 
@@ -966,62 +738,69 @@ def compact_text(value: str, max_chars: int, label: str = "content") -> str:
 
 # ============================================================
 
-
-
 async def brand_strategist_node(
 
     state: CampaignState,
 
 ):
 
-
-
     logger.info("LANGGRAPH START | brand_strategist")
-
-
 
     prompt = f"""
 
 Research this campaign.
 
-
-
 CAMPAIGN BRIEF:
 
 {state['campaign_brief']}
 
-
-
 Conduct and return the COMPLETE research report. Do not summarize away
+
 competitor details or omit evidence and sources.
 
 Required sections:
 
 - Audience Insights: target segments, motivations, needs, pain points,
+
   and buying behavior.
+
 - Competitive Analysis: analyze 2-3 named competitor brands. For each,
+
   include positioning, target audience, value proposition, strengths,
+
   weaknesses or market gaps, and opportunities to differentiate.
+
 - Trending Topics: identify 3-5 current category trends and explain
+
   why each matters to this campaign.
+
 - Market Positioning Opportunities: explain how this product can
+
   differentiate itself based on the research.
+
 - Key Strategic Insights: actionable recommendations for the campaign.
+
 - Risks and Considerations: identify claims or assumptions that need
+
   validation.
+
 - Sources: include actual source URLs and publication dates where
+
   available. Do not invent sources, dates, statistics, or claims.
 
 Use Google Search for the research. For current trends and market activity,
+
 include the current year in search queries. Distinguish verified findings
+
 from hypotheses. Do not create captions, slogans, advertising copy,
+
 image prompts, or designs.
 
 Return enough detail for the Creative Director and downstream agents to use.
+
 Do not replace competitor analysis with a generic positioning summary.
+
 """
-
-
 
     result = await call_specialist(
 
@@ -1032,8 +811,6 @@ Do not replace competitor analysis with a generic positioning summary.
         state["campaign_id"],
 
     )
-
-
 
     return {
 
@@ -1047,17 +824,11 @@ Do not replace competitor analysis with a generic positioning summary.
 
     }
 
-
-
-
-
 # ============================================================
 
 # NODE 2: COPYWRITER
 
 # ============================================================
-
-
 
 async def copywriter_node(
 
@@ -1065,29 +836,19 @@ async def copywriter_node(
 
 ):
 
-
-
     logger.info("LANGGRAPH START | copywriter")
-
-
 
     prompt = f"""
 
 Create exactly THREE Instagram captions. Number them Caption 1 through Caption 3.
 
-
-
 CAMPAIGN BRIEF:
 
 {state['campaign_brief']}
 
-
-
 BRAND STRATEGIST RESEARCH:
 
 {state['brand_strategy']}
-
-
 
 Requirements:
 
@@ -1103,13 +864,9 @@ Requirements:
 
 - Follow your Instagram copywriting skill.
 
-
-
 Return all three complete captions together. Do not create additional captions.
 
 """
-
-
 
     result = await call_specialist(
 
@@ -1120,8 +877,6 @@ Return all three complete captions together. Do not create additional captions.
         state["campaign_id"],
 
     )
-
-
 
     return {
 
@@ -1135,17 +890,11 @@ Return all three complete captions together. Do not create additional captions.
 
     }
 
-
-
-
-
 # ============================================================
 
 # NODE 3: DESIGNER
 
 # ============================================================
-
-
 
 async def designer_node(
 
@@ -1153,11 +902,7 @@ async def designer_node(
 
 ):
 
-
-
     logger.info("LANGGRAPH START | designer")
-
-
 
     prompt = f"""
 
@@ -1165,25 +910,17 @@ Generate exactly THREE campaign images, one for each of the three Instagram capt
 
 Do not generate additional images, even if other text in the brief mentions a different count.
 
-
-
 CAMPAIGN BRIEF:
 
  {compact_text(state['campaign_brief'], 2500, "campaign brief")}
-
-
 
 BRAND STRATEGY:
 
 {compact_text(state['brand_strategy'], 6500, "brand strategy")}
 
-
-
 FINAL CAPTIONS:
 
 {compact_text(state['captions'], 7500, "captions")}
-
-
 
 Requirements:
 
@@ -1205,13 +942,9 @@ Requirements:
 
 - Clearly report any failed image generation.
 
-
-
 Do not regenerate previously generated images.
 
 """
-
-
 
     result = await call_specialist(
 
@@ -1223,11 +956,7 @@ Do not regenerate previously generated images.
 
     )
 
-
-
     image_uris, image_urls = extract_image_assets(result)
-
-
 
     logger.info(
 
@@ -1238,8 +967,6 @@ Do not regenerate previously generated images.
         len(image_urls),
 
     )
-
-
 
     return {
 
@@ -1257,19 +984,11 @@ Do not regenerate previously generated images.
 
     }
 
-
-
-
-
-
-
 # ============================================================
 
 # NODE 4: PRELIMINARY CRITIC (PARALLEL WITH DESIGNER)
 
 # ============================================================
-
-
 
 async def preliminary_critic_node(state: CampaignState):
 
@@ -1289,25 +1008,17 @@ Images are still being generated, so do not approve or reject the complete
 
 campaign. Return concise observations and any likely copy/strategy concerns.
 
-
-
 BRIEF:
 
 {compact_text(state.get('campaign_brief', ''), 1500, 'brief')}
-
-
 
 STRATEGY:
 
 {compact_text(state.get('brand_strategy', ''), 3000, 'strategy')}
 
-
-
 CAPTIONS:
 
 {compact_text(state.get('captions', ''), 4000, 'captions')}
-
-
 
 Return concise findings only. Do not request image review.
 
@@ -1323,17 +1034,11 @@ Return concise findings only. Do not request image review.
 
     }
 
-
-
-
-
 # ============================================================
 
 # NODE 5: FINAL CRITIC
 
 # ============================================================
-
-
 
 def _extract_section(raw: str, heading_patterns: list[str]) -> str:
 
@@ -1359,17 +1064,13 @@ def _extract_section(raw: str, heading_patterns: list[str]) -> str:
 
     for line in lines[start:]:
 
-        if re.match(r"^\s*(?:\\*\\*)?(?:POSTS REVIEW|VISUALS REVIEW|OVERALL ASSESSMENT)(?:\\*\\*)?\s*:?\s*$", line, re.I):
+        if re.match(r"^\s*(?:\*{1,2})?(?:POSTS REVIEW|VISUALS REVIEW|OVERALL ASSESSMENT)(?:\*{1,2})?\s*:?\s*$", line, re.I):
 
             break
 
         collected.append(line)
 
     return "\n".join(collected).strip()
-
-
-
-
 
 def _section_status(section: str) -> str:
 
@@ -1393,17 +1094,13 @@ def _section_status(section: str) -> str:
 
     return value
 
-
-
-
-
 def _section_score(section: str):
 
-    match = re.search(r"\bScore\s*:\s*(\d+(?:\\.\d+)?)\s*(?:/|out of)\s*10", section or "", re.I)
+    match = re.search(r"\bScore\s*:\s*(\d+(?:\.\d+)?)\s*(?:/|out of)\s*10", section or "", re.I)
 
     if not match:
 
-        match = re.search(r"\bScore\s*:\s*(\d+(?:\\.\d+)?)", section or "", re.I)
+        match = re.search(r"\bScore\s*:\s*(\d+(?:\.\d+)?)", section or "", re.I)
 
     if not match:
 
@@ -1417,10 +1114,6 @@ def _section_score(section: str):
 
         return None
 
-
-
-
-
 def parse_critic_review(raw: str) -> dict:
 
     """
@@ -1431,13 +1124,11 @@ def parse_critic_review(raw: str) -> dict:
 
     """
 
-    posts = _extract_section(raw, [r"^\s*(?:\\*\\*)?POSTS REVIEW"])
+    posts = _extract_section(raw, [r"^\s*(?:\*{1,2})?POSTS REVIEW"])
 
-    visuals = _extract_section(raw, [r"^\s*(?:\\*\\*)?VISUALS REVIEW"])
+    visuals = _extract_section(raw, [r"^\s*(?:\*{1,2})?VISUALS REVIEW"])
 
-    overall = _extract_section(raw, [r"^\s*(?:\\*\\*)?OVERALL ASSESSMENT"])
-
-
+    overall = _extract_section(raw, [r"^\s*(?:\*{1,2})?OVERALL ASSESSMENT"])
 
     if not (posts or visuals or overall):
 
@@ -1461,8 +1152,6 @@ def parse_critic_review(raw: str) -> dict:
 
         }
 
-
-
     all_approved_match = re.search(
 
         r"\bAll\s+Approved\s*:\s*(YES|NO)\b",
@@ -1475,17 +1164,13 @@ def parse_critic_review(raw: str) -> dict:
 
     all_approved = all_approved_match.group(1).upper() if all_approved_match else ""
 
-
-
     posts_status = _section_status(posts)
 
     visuals_status = _section_status(visuals)
 
-
-
     # NOT_REVIEWED is not approval when campaign images are required.
 
-    has_images = bool(re.search(r"(?:gs://|https://storage\\.googleapis\\.com/)", raw))
+    has_images = bool(re.search(r"(?:gs://|https://storage\.googleapis\.com/)", raw))
 
     posts_ok = posts_status == "APPROVED"
 
@@ -1494,8 +1179,6 @@ def parse_critic_review(raw: str) -> dict:
         visuals_status == "NOT_REVIEWED" and not has_images
 
     )
-
-
 
     if all_approved == "YES" and posts_ok and visuals_ok:
 
@@ -1509,8 +1192,6 @@ def parse_critic_review(raw: str) -> dict:
 
         approval = "NEEDS_HUMAN_REVIEW"
 
-
-
     targets = []
 
     if posts_status in {"NEEDS_REVISION", "REJECTED"}:
@@ -1520,8 +1201,6 @@ def parse_critic_review(raw: str) -> dict:
     if visuals_status in {"NEEDS_REVISION", "REJECTED"}:
 
         targets.append("designer")
-
-
 
     # Preserve critic wording as actionable specialist feedback.
 
@@ -1543,8 +1222,6 @@ def parse_critic_review(raw: str) -> dict:
 
             issues.extend(f"{section_name}: {line}" for line in issue_lines)
 
-
-
     overall_score = _section_score(overall)
 
     if overall_score is None:
@@ -1552,8 +1229,6 @@ def parse_critic_review(raw: str) -> dict:
         scores = [x for x in (_section_score(posts), _section_score(visuals)) if x is not None]
 
         overall_score = round(sum(scores) / len(scores), 1) if scores else None
-
-
 
     summary = overall[:1200] or "Critic review parsed from its section-based response."
 
@@ -1583,10 +1258,6 @@ def parse_critic_review(raw: str) -> dict:
 
     }
 
-
-
-
-
 async def final_critic_node(state: CampaignState):
 
     logger.info("LANGGRAPH START | final_critic | revision=%s", state.get("revision_count", 0))
@@ -1601,47 +1272,31 @@ Use the preliminary review as context, but independently inspect the final work.
 
 Do not approve if required deliverables are missing or materially flawed.
 
-
-
 CAMPAIGN BRIEF:
 
 {compact_text(state.get('campaign_brief', ''), 1500, 'brief')}
-
-
 
 BRAND STRATEGY:
 
 {compact_text(state.get('brand_strategy', ''), 3000, 'strategy')}
 
-
-
 CAPTIONS:
 
 {compact_text(state.get('captions', ''), 4000, 'captions')}
-
-
 
 DESIGNER REPORT:
 
 {compact_text(state.get('designer_output', ''), 2000, 'designer output')}
 
-
-
 IMAGE REFERENCES (inspect every image; these are the exact deliverables):
 
 {chr(10).join(["gcs_uri: " + uri for uri in state.get("image_uris", [])] + ["https_url: " + url for url in state.get("image_urls", [])]) or "No image references were returned."}
-
-
 
 PRELIMINARY REVIEW:
 
 {compact_text(state.get('preliminary_critic_review', ''), 1200, 'preliminary review')}
 
-
-
 REVISION ROUND: {state.get('revision_count', 0)}
-
-
 
 Return your normal three-section review using this exact structure:
 
@@ -1657,8 +1312,6 @@ Issues:
 
 Suggestions:
 
-
-
 VISUALS REVIEW:
 
 Score: X/10
@@ -1671,8 +1324,6 @@ Issues:
 
 Suggestions:
 
-
-
 OVERALL ASSESSMENT:
 
 All Approved: YES or NO
@@ -1680,8 +1331,6 @@ All Approved: YES or NO
 Priority Revisions:
 
 Overall Score: X/10
-
-
 
 Inspect every supplied gcs_uri using your image-review tool.
 
@@ -1723,17 +1372,11 @@ A score alone does not constitute approval. All Approved must be YES and both re
 
     }
 
-
-
-
-
 # ============================================================
 
 # NODE 6: TARGETED REVISION DISPATCHER
 
 # ============================================================
-
-
 
 async def revision_node(state: CampaignState):
 
@@ -1751,8 +1394,6 @@ async def revision_node(state: CampaignState):
 
     strategy_feedback = critic.get("brand_strategist_feedback", "")
 
-
-
     if copy_feedback.strip():
 
         targets.add("copywriter")
@@ -1764,8 +1405,6 @@ async def revision_node(state: CampaignState):
     if strategy_feedback.strip():
 
         targets.add("brand_strategist")
-
-
 
     # If Critic provides no targets, do not guess which output to change.
 
@@ -1781,8 +1420,6 @@ async def revision_node(state: CampaignState):
 
         }
 
-
-
     async def revise_strategy():
 
         prompt = f"""Revise only the brand strategy using this Critic feedback.
@@ -1796,8 +1433,6 @@ CRITIC FEEDBACK: {compact_text(strategy_feedback or critic.get('summary',''), 15
 Return the complete revised strategy only."""
 
         return await call_specialist("brand_strategist", prompt, state["campaign_id"] + f"-revision-{round_number}")
-
-
 
     async def revise_copy():
 
@@ -1814,8 +1449,6 @@ CRITIC FEEDBACK: {compact_text(copy_feedback or critic.get('summary',''), 1500, 
 Return the complete revised set of captions, preserving the originally requested count."""
 
         return await call_specialist("copywriter", prompt, state["campaign_id"] + f"-revision-{round_number}")
-
-
 
     async def revise_design():
 
@@ -1838,8 +1471,6 @@ EXISTING CAMPAIGN IMAGE REFERENCES (retain approved assets):
 CRITIC VISUAL FEEDBACK:
 
 {compact_text(design_feedback or critic.get('summary',''), 2200, 'feedback')}
-
-
 
 Perform only the visual corrections explicitly requested by the Critic.
 
@@ -1867,8 +1498,6 @@ Perform only the visual corrections explicitly requested by the Critic.
 
         return await call_specialist("designer", prompt, state["campaign_id"] + f"-revision-{round_number}")
 
-
-
     calls = {}
 
     if "brand_strategist" in targets:
@@ -1882,8 +1511,6 @@ Perform only the visual corrections explicitly requested by the Critic.
     if "designer" in targets:
 
         calls["designer_output"] = revise_design()
-
-
 
     names = list(calls)
 
@@ -1933,17 +1560,11 @@ Perform only the visual corrections explicitly requested by the Critic.
 
     return updates
 
-
-
-
-
 # ============================================================
 
 # CONDITIONAL ROUTING
 
 # ============================================================
-
-
 
 def route_after_critic(state: CampaignState) -> str:
 
@@ -1967,10 +1588,6 @@ def route_after_critic(state: CampaignState) -> str:
 
     return "human_review"
 
-
-
-
-
 def human_review_node(state: CampaignState):
 
     return {
@@ -1983,17 +1600,11 @@ def human_review_node(state: CampaignState):
 
     }
 
-
-
-
-
 # ============================================================
 
 # NODE 5: PROJECT MANAGER
 
 # ============================================================
-
-
 
 async def project_manager_node(
 
@@ -2029,11 +1640,7 @@ async def project_manager_node(
 
         }
 
-
-
     logger.info("LANGGRAPH START | project_manager")
-
-
 
     # Resolve browser-ready image URLs before PM persistence so the PM can
 
@@ -2085,17 +1692,13 @@ async def project_manager_node(
 
             logger.exception("PROJECT MANAGER IMAGE LINK GENERATION FAILED")
 
-
-
     critic_decision = state.get("approval_status", "NEEDS_HUMAN_REVIEW")
 
     critic_review = state.get("critic_review", "")
 
     critic_feedback = critic_data.get("issues") or []
 
-    unresolved_feedback = "\\\n".join(str(item) for item in critic_feedback)
-
-
+    unresolved_feedback = "\\\\\n".join(str(item) for item in critic_feedback)
 
     prompt = f"""
 
@@ -2103,31 +1706,21 @@ You are receiving the COMPLETE campaign handoff from the Creative Director.
 
 Create the full project plan and, when configured, persist it to Notion.
 
-
-
 CAMPAIGN BRIEF AND BUSINESS REQUIREMENTS:
 
 {compact_text(state.get('campaign_brief', ''), 5000, 'campaign brief')}
-
-
 
 BRAND STRATEGY:
 
 {compact_text(state.get('brand_strategy', ''), 5000, 'brand strategy')}
 
-
-
 FINAL COPY — exactly three captions:
 
 {compact_text(state.get('captions', ''), 7000, 'captions')}
 
-
-
 DESIGNER REPORT AND ASSET MANIFEST:
 
 {compact_text(state.get('designer_output', ''), 5000, 'designer output')}
-
-
 
 GENERATED IMAGE REFERENCES:
 
@@ -2143,19 +1736,13 @@ Image-link preparation note:
 
 {pm_image_link_error or 'No image-link error reported'}
 
-
-
 PRELIMINARY CRITIC REVIEW:
 
 {compact_text(state.get('preliminary_critic_review', ''), 2500, 'preliminary review')}
 
-
-
 FINAL CRITIC REVIEW:
 
 {compact_text(critic_review, 5000, 'final critic review')}
-
-
 
 CRITIC DECISION: {critic_decision}
 
@@ -2164,8 +1751,6 @@ REVISION ROUNDS COMPLETED: {state.get('revision_count', 0)}
 UNRESOLVED CRITIC FEEDBACK:
 
 {unresolved_feedback or 'None reported'}
-
-
 
 PLANNING INSTRUCTIONS:
 
@@ -2205,33 +1790,29 @@ PLANNING INSTRUCTIONS:
 
 - Never state that future tasks are completed. Distinguish estimates from confirmed dates.
 
-
-
 REQUIRED RESPONSE — do not replace this with a short status summary:
 
-1\. Project Overview (objective, audience, deliverables, launch goal, approval status).
+1. Project Overview (objective, audience, deliverables, launch goal, approval status).
 
-2\. Detailed Phase Timeline (Strategy, Creation, Review, Launch; each with dates,
+2. Detailed Phase Timeline (Strategy, Creation, Review, Launch; each with dates,
 
    status, and key activities).
 
-3\. Complete Task Breakdown table with columns:
+3. Complete Task Breakdown table with columns:
 
    Task | Description | Duration | Start Date | Due Date | Priority |
 
    Status | Dependencies | Owner.
 
-4\. Milestones and decision checkpoints with dates.
+4. Milestones and decision checkpoints with dates.
 
-5\. Risks, blockers, dependencies, and mitigation.
+5. Risks, blockers, dependencies, and mitigation.
 
-6\. Budget Breakdown (or explicitly state that no budget was supplied).
+6. Budget Breakdown (or explicitly state that no budget was supplied).
 
-7\. Notion Status, including whether the project was created, how many tasks were
+7. Notion Status, including whether the project was created, how many tasks were
 
    successfully created, and any failures. Only report confirmed API results.
-
-
 
 The complete text plan is the primary deliverable. Do not truncate the task list.
 
@@ -2239,13 +1820,7 @@ Do not regenerate captions or images. Do not merely report phase names and statu
 
 """
 
-
-
-
-
     try:
-
-
 
         result = await call_specialist(
 
@@ -2256,8 +1831,6 @@ Do not regenerate captions or images. Do not merely report phase names and statu
             state["campaign_id"],
 
         )
-
-
 
         logger.info(
 
@@ -2287,15 +1860,9 @@ Do not regenerate captions or images. Do not merely report phase names and statu
 
         }
 
-
-
     except Exception as exc:
 
-
-
         logger.exception("Project Manager failed")
-
-
 
         return {
 
@@ -2319,19 +1886,11 @@ Do not regenerate captions or images. Do not merely report phase names and statu
 
         }
 
-
-
-
-
-
-
 # ============================================================
 
 # NODE: FINAL RESPONSE
 
 # ============================================================
-
-
 
 def finalize_campaign(state: CampaignState):
 
@@ -2348,8 +1907,6 @@ def finalize_campaign(state: CampaignState):
     image_urls = list(dict.fromkeys(state.get("image_urls", []) or []))
 
     link_error = ""
-
-
 
     # Convert GCS object URIs to short-lived HTTPS URLs. Direct HTTPS URLs
 
@@ -2381,8 +1938,6 @@ def finalize_campaign(state: CampaignState):
 
             logger.exception("IMAGE LINK GENERATION FAILED")
 
-
-
     image_urls = list(dict.fromkeys(
 
         url for url in (_clean_image_reference(u) for u in image_urls)
@@ -2393,8 +1948,6 @@ def finalize_campaign(state: CampaignState):
 
     ))
 
-
-
     image_section = ["## Campaign Images"]
 
     if image_urls:
@@ -2403,9 +1956,9 @@ def finalize_campaign(state: CampaignState):
 
             image_section.append(f"### Campaign image {index}")
 
-            image_section.append(f"![Campaign image {index}]\({url})")
+            image_section.append(f"![Campaign image {index}]({url})")
 
-            image_section.append(f"[Open image {index}]\({url})")
+            image_section.append(f"[Open image {index}]({url})")
 
     elif image_uris:
 
@@ -2420,8 +1973,6 @@ def finalize_campaign(state: CampaignState):
     else:
 
         image_section.append("No image references were returned by the Designer.")
-
-
 
     response = "\n\n".join([
 
@@ -2489,19 +2040,11 @@ def finalize_campaign(state: CampaignState):
 
     }
 
-
-
-
-
-
-
 # ============================================================
 
 # BUILD LANGGRAPH WORKFLOW
 
 # ============================================================
-
-
 
 def build_campaign_graph():
 
@@ -2525,8 +2068,6 @@ def build_campaign_graph():
 
     workflow.add_node("finalize", finalize_campaign)
 
-
-
     workflow.add_edge(START, "brand_strategist")
 
     workflow.add_edge("brand_strategist", "copywriter")
@@ -2536,8 +2077,6 @@ def build_campaign_graph():
     workflow.add_edge("copywriter", "preliminary_critic")
 
     workflow.add_edge(["designer", "preliminary_critic"], "final_critic")
-
-
 
     workflow.add_conditional_edges(
 
@@ -2567,21 +2106,11 @@ def build_campaign_graph():
 
     return workflow.compile(checkpointer=InMemorySaver())
 
-
-
-
-
 campaign_graph = build_campaign_graph()
-
-
-
-
 
 # CAMPAIGN WORKFLOW TOOL
 
 # ============================================================
-
-
 
 async def run_campaign_workflow(
 
@@ -2597,19 +2126,13 @@ async def run_campaign_workflow(
 
     Run the complete campaign using LangGraph.
 
-
-
     Successful results are cached in the current ADK session
 
     to reduce accidental duplicate execution.
 
     """
 
-
-
     if not campaign_brief or not campaign_brief.strip():
-
-
 
         return {
 
@@ -2619,13 +2142,9 @@ async def run_campaign_workflow(
 
         }
 
-
-
     # Stable ID for an identical brief unless a new ID is supplied.
 
     if not campaign_id.strip():
-
-
 
         brief_hash = hashlib.sha256(
 
@@ -2633,11 +2152,7 @@ async def run_campaign_workflow(
 
         ).hexdigest()[:16]
 
-
-
         campaign_id = f"campaign-{brief_hash}"
-
-
 
     campaign_id = re.sub(
 
@@ -2649,19 +2164,13 @@ async def run_campaign_workflow(
 
     )[:100]
 
-
-
     brief_hash = hashlib.sha256(
 
         campaign_brief.strip().encode("utf-8")
 
     ).hexdigest()
 
-
-
     cache_key = f"{campaign_id}:{brief_hash}"
-
-
 
     session_state = (
 
@@ -2673,15 +2182,9 @@ async def run_campaign_workflow(
 
     )
 
-
-
     cache = {}
 
-
-
     if session_state is not None:
-
-
 
         cache = session_state.get(
 
@@ -2691,11 +2194,7 @@ async def run_campaign_workflow(
 
         )
 
-
-
         if cache_key in cache:
-
-
 
             logger.warning(
 
@@ -2705,11 +2204,7 @@ async def run_campaign_workflow(
 
             )
 
-
-
             return cache[cache_key]
-
-
 
     logger.info(
 
@@ -2718,8 +2213,6 @@ async def run_campaign_workflow(
         campaign_id,
 
     )
-
-
 
     initial_state: CampaignState = {
 
@@ -2743,8 +2236,6 @@ async def run_campaign_workflow(
 
     }
 
-
-
     config = {
 
         "configurable": {
@@ -2755,15 +2246,9 @@ async def run_campaign_workflow(
 
     }
 
-
-
     started = time.perf_counter()
 
-
-
     try:
-
-
 
         result = await campaign_graph.ainvoke(
 
@@ -2773,11 +2258,7 @@ async def run_campaign_workflow(
 
         )
 
-
-
         elapsed = time.perf_counter() - started
-
-
 
         response = {
 
@@ -2809,8 +2290,6 @@ async def run_campaign_workflow(
 
         }
 
-
-
         logger.info(
 
             "CAMPAIGN COMPLETE | campaign=%s | "
@@ -2825,8 +2304,6 @@ async def run_campaign_workflow(
 
         )
 
-
-
         if (
 
             response["status"] in ("completed", "completed_with_critic_feedback")
@@ -2835,11 +2312,7 @@ async def run_campaign_workflow(
 
         ):
 
-
-
             cache[cache_key] = response
-
-
 
             # Keep the session cache bounded.
 
@@ -2847,19 +2320,11 @@ async def run_campaign_workflow(
 
                 cache.pop(next(iter(cache)))
 
-
-
             session_state["campaign_workflow_cache"] = cache
-
-
 
         return response
 
-
-
     except Exception as exc:
-
-
 
         logger.exception(
 
@@ -2868,8 +2333,6 @@ async def run_campaign_workflow(
             campaign_id,
 
         )
-
-
 
         return {
 
@@ -2889,49 +2352,45 @@ async def run_campaign_workflow(
 
         }
 
-
-
-
-
 # ============================================================
 
 # CREATIVE DIRECTOR
 
 # ============================================================
 
-
-
 SYSTEM_INSTRUCTION = """
 
 You are the Creative Director for an AI marketing campaign studio.
 
-
-
 For a complete campaign:
 
-1\. Call run_campaign_workflow exactly once with the complete campaign brief.
+1. Call run_campaign_workflow exactly once with the complete campaign brief.
 
-2\. LangGraph coordinates the specialists, parallel branches, Critic approval,
+2. LangGraph coordinates the specialists, parallel branches, Critic approval,
 
    targeted revisions, and Project Manager. Do not call specialists yourself.
 
-3\. Do not independently generate or rewrite specialist deliverables.
+3. Do not independently generate or rewrite specialist deliverables.
 
-4\. Do not repeat a completed campaign or bypass the cache.
+4. Do not repeat a completed campaign or bypass the cache.
 
-5\. Present the returned result faithfully. Include the COMPLETE Brand Strategy
+5. Present the returned result faithfully. Include the COMPLETE Brand Strategy
+
    & Market Research report, especially the 2-3 named competitor analyses,
+
    3-5 current trends, strategic insights, and source URLs. Do not replace it
+
    with a short strategy summary or omit competitor information.
+
    Preserve the complete Project Manager timeline and task breakdown; do not
+
    reduce it to a short phase-status summary. Include approval status,
+
    revision count, image references, and confirmed Notion project/task status.
 
-6\. If the workflow returns NEEDS_HUMAN_REVIEW or an error, explain it honestly.
+6. If the workflow returns NEEDS_HUMAN_REVIEW or an error, explain it honestly.
 
-7\. Do not claim Notion tasks were created unless the Project Manager confirms it.
-
-
+7. Do not claim Notion tasks were created unless the Project Manager confirms it.
 
 Workflow policy:
 
@@ -2983,10 +2442,6 @@ Workflow policy:
 
 """
 
-
-
-
-
 generation_config = types.GenerateContentConfig(
 
     max_output_tokens=MAX_OUTPUT_TOKENS,
@@ -3002,10 +2457,6 @@ generation_config = types.GenerateContentConfig(
     ),
 
 )
-
-
-
-
 
 root_agent = Agent(
 
@@ -3037,17 +2488,11 @@ root_agent = Agent(
 
 )
 
-
-
-
-
 # ============================================================
 
 # ADK APPLICATION
 
 # ============================================================
-
-
 
 root_app = App(
 
@@ -3063,17 +2508,9 @@ root_app = App(
 
 )
 
-
-
-
-
 # ADK CLI convention
 
 app = root_app
-
-
-
-
 
 # ============================================================
 
@@ -3081,21 +2518,15 @@ app = root_app
 
 # ============================================================
 
-
-
 CAMPAIGN_TEST_PROMPT = """
 
 Create a complete Instagram marketing campaign for Ambika Flowers,
 
 an Indian flower and gift store in Coppell, Texas.
 
-
-
 OBJECTIVE:
 
 Increase local brand awareness and generate in-store visits and flower orders.
-
-
 
 AUDIENCE:
 
@@ -3105,8 +2536,6 @@ customers shopping for fresh flowers, garlands, bouquets, gifts, birthdays,
 
 anniversaries, festivals, and special occasions.
 
-
-
 BRAND:
 
 Position Ambika Flowers as a welcoming, premium-quality local flower
@@ -3114,8 +2543,6 @@ Position Ambika Flowers as a welcoming, premium-quality local flower
 destination with an Indian cultural touch. The tone should be elegant,
 
 warm, trustworthy, and accessible.
-
-
 
 CREATIVE DIRECTION:
 
@@ -3126,8 +2553,6 @@ styling, premium product photography, warm compositions, and clear visual
 focus on the flowers. Avoid clutter, artificial-looking flowers, generic
 
 stock-photo aesthetics, and excessive text on images.
-
-
 
 DELIVERABLES:
 
@@ -3143,15 +2568,11 @@ DELIVERABLES:
 
 - Final approved campaign and project plan in Notion.
 
-
-
 ACCURACY:
 
 Do not invent discounts, prices, store hours, phone numbers, or product
 
 availability. Do not put unreadable or fabricated text on images.
-
-
 
 QUALITY GATE:
 
@@ -3165,8 +2586,6 @@ mark NEEDS_HUMAN_REVIEW. Project Manager must create the Notion project
 
 and tasks only after final Critic approval.
 
-
-
 FINAL REPORT:
 
 Include the three captions, image links or URIs, Critic score and approval
@@ -3176,5 +2595,4 @@ status, revision count, complete Project Manager timeline/task breakdown,
 and Notion project/task creation status.
 
 """
-
 
