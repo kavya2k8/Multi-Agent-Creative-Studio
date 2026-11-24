@@ -649,6 +649,7 @@ google-api-core==2.34.0 \
     #   google-cloud-core
     #   google-cloud-dataplex
     #   google-cloud-discoveryengine
+    #   google-cloud-firestore
     #   google-cloud-logging
     #   google-cloud-monitoring
     #   google-cloud-pubsub
@@ -678,6 +679,7 @@ google-auth==2.62.2 \
     #   google-cloud-core
     #   google-cloud-dataplex
     #   google-cloud-discoveryengine
+    #   google-cloud-firestore
     #   google-cloud-logging
     #   google-cloud-monitoring
     #   google-cloud-pubsub
@@ -724,6 +726,7 @@ google-cloud-core==2.8.0 \
     # via
     #   google-cloud-bigquery
     #   google-cloud-bigtable
+    #   google-cloud-firestore
     #   google-cloud-logging
     #   google-cloud-spanner
     #   google-cloud-storage
@@ -735,6 +738,10 @@ google-cloud-discoveryengine==0.13.12 \
     --hash=sha256:295f8c6df3fb26b90fb82c2cd6fbcf4b477661addcb19a94eea16463a5c4e041 \
     --hash=sha256:d6b9f8fadd8ad0d2f4438231c5eb7772a317e9f59cafbcbadc19b5d54c609419
     # via google-adk
+google-cloud-firestore==2.34.1 \
+    --hash=sha256:6279f049336e49181e8c1d2dbf14e9c0cfb75ddf03c70971adc88fb272cdae29 \
+    --hash=sha256:d403b12375e4f68176bb638451417330a7a66d11c9cace98f7778109b884d9ab
+    # via creative-director
 google-cloud-logging==3.17.0 \
     --hash=sha256:d7343f2b82b4f9e9244bfc8aba7ad034c415f9bbb405ed28d1125aa37d270b72 \
     --hash=sha256:da2819da683a5135e21c2853ff2c86040786cd5521c3f71424755c110cf36fe2
@@ -911,6 +918,7 @@ grpcio==1.85.1 \
     #   google-cloud-bigquery-storage
     #   google-cloud-bigtable
     #   google-cloud-dataplex
+    #   google-cloud-firestore
     #   google-cloud-logging
     #   google-cloud-monitoring
     #   google-cloud-pubsub
@@ -1801,6 +1809,7 @@ proto-plus==1.29.0 \
     #   google-cloud-bigtable
     #   google-cloud-dataplex
     #   google-cloud-discoveryengine
+    #   google-cloud-firestore
     #   google-cloud-logging
     #   google-cloud-monitoring
     #   google-cloud-pubsub
@@ -1828,6 +1837,7 @@ protobuf==6.33.6 \
     #   google-cloud-bigtable
     #   google-cloud-dataplex
     #   google-cloud-discoveryengine
+    #   google-cloud-firestore
     #   google-cloud-logging
     #   google-cloud-monitoring
     #   google-cloud-pubsub

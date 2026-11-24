@@ -36,17 +36,21 @@ SPECIALIST_URLS = {
     "PM_AGENT_URL": "https://project-manager-681944429183.us-central1.run.app",
 }
 
+
+
 REQUIREMENTS = [
     "google-cloud-aiplatform[agent_engines,adk]>=1.132.0,<2.0.0",
     "google-adk[a2a]==1.31.1",
     "google-genai>=1.70.0",
     "google-cloud-storage>=2.10.0",
+    "google-cloud-firestore>=2.16.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
     "cloudpickle>=3.0.0",
     "langgraph>=1.2.20",
     "httpx>=0.28.1",
 ]
+
 
 
 def load_configuration() -> dict[str, str]:
